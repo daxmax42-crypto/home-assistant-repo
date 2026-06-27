@@ -22,30 +22,82 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# Monkey-patch aiohttp's HTTP parser to accept headers with spaces after field name
-# The ISEEVY decoder returns "Content- type: text/xml" (space after Content-)
-# This is invalid per RFC 7230 but we need to handle it
 
-# Increase the header line limit to handle malformed headers
-aiohttp.http_parser.MAX_LINE_SIZE = 16384
-aiohttp.http_parser.MAX_FIELD_SIZE = 16384
-
-# Patch the header parser to be more lenient
-_original_parse_headers = aiohttp.http_parser.HttpParser.parse_headers
-
-def _lenient_parse_headers(self, lines):
-    """Parse headers, fixing malformed 'Content- type' header."""
-    fixed_lines = []
-    for line in lines:
-        if isinstance(line, bytes):
-            line = line.decode('latin-1', errors='replace')
-        # Fix "Content- type" -> "Content-Type"
-        if line.startswith('Content- '):
-            line = line.replace('Content- ', 'Content-', 1)
-        fixed_lines.append(line.encode('latin-1') if isinstance(line, str) else line)
-    return _original_parse_headers(self, fixed_lines)
-
-aiohttp.http_parser.HttpParser.parse_headers = _lenient_parse_headers
+async def _raw_http_get(host: str, port: int, path: str, username: str, password: str, timeout: int = 10) -> tuple[int, dict[str, str], bytes]:
+    """Perform raw HTTP GET request, handling malformed headers from ISEEVY decoder.
+    
+    The ISEEVY decoder returns invalid headers like 'Content- type: text/xml'
+    (space after Content-) which aiohttp's strict parser rejects.
+    This function reads raw HTTP response and parses headers leniently.
+    """
+    import base64
+    
+    # Create connection
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(host, port),
+        timeout=timeout
+    )
+    
+    try:
+        # Build request
+        auth = base64.b64encode(f"{username}:{password}".encode()).decode()
+        request = (
+            f"GET {path} HTTP/1.1\r\n"
+            f"Host: {host}:{port}\r\n"
+            f"Authorization: Basic {auth}\r\n"
+            f"Connection: close\r\n"
+            f"User-Agent: HomeAssistant-ISEEVY/1.0\r\n"
+            f"\r\n"
+        )
+        
+        writer.write(request.encode())
+        await writer.drain()
+        
+        # Read status line
+        status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        if not status_line:
+            raise aiohttp.ClientConnectorError("Empty response", None)
+        
+        status_line = status_line.decode('latin-1', errors='replace').strip()
+        parts = status_line.split(' ', 2)
+        if len(parts) < 2:
+            raise aiohttp.ClientResponseError("Invalid status line", None)
+        status_code = int(parts[1])
+        
+        # Read headers leniently
+        headers = {}
+        while True:
+            line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+            if not line or line == b'\r\n':
+                break
+            line = line.decode('latin-1', errors='replace').rstrip('\r\n')
+            if ':' in line:
+                key, value = line.split(':', 1)
+                key = key.strip()
+                value = value.strip()
+                # Fix malformed "Content- type" -> "Content-Type"
+                if key == 'Content-':
+                    key = 'Content-Type'
+                headers[key.lower()] = value
+        
+        # Read body
+        body = b''
+        content_length = headers.get('content-length')
+        if content_length:
+            try:
+                length = int(content_length)
+                body = await asyncio.wait_for(reader.readexactly(length), timeout=timeout)
+            except (ValueError, asyncio.IncompleteReadError):
+                body = await reader.read()
+        else:
+            # No content-length, read until EOF
+            body = await reader.read()
+        
+        return status_code, headers, body
+        
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 class ISEEVYAPIError(Exception):
@@ -84,7 +136,7 @@ class ISEEVYClient:
 
     @property
     def session(self) -> aiohttp.ClientSession:
-        """Get or create aiohttp session."""
+        """Get or create aiohttp session (kept for compatibility)."""
         if self._session is None or self._session.closed:
             timeout = aiohttp.ClientTimeout(total=10)
             self._session = aiohttp.ClientSession(timeout=timeout)
@@ -96,25 +148,34 @@ class ISEEVYClient:
             await self._session.close()
 
     async def _request(self, endpoint: str, params: dict[str, str] | None = None) -> str:
-        """Make HTTP request with basic auth."""
+        """Make HTTP request using raw socket to handle malformed headers."""
         url = f"{self._base_url}{endpoint}"
-        auth = aiohttp.BasicAuth(self.username, self.password)
-
+        if params:
+            query = '&'.join(f"{k}={v}" for k, v in params.items())
+            path = f"{endpoint}?{query}"
+        else:
+            path = endpoint
+        
         try:
-            async with self.session.get(url, auth=auth, params=params) as response:
-                if response.status == 401:
-                    raise ISEEVYAuthError("Authentication failed")
-                if response.status == 404:
-                    raise ISEEVYAPIError(f"Endpoint not found: {endpoint}")
-                if response.status >= 400:
-                    raise ISEEVYAPIError(f"HTTP {response.status}: {await response.text()}")
-                
-                text = await response.text()
-                return text
-        except aiohttp.ClientConnectorError as err:
-            raise ISEEVYConnectionError(f"Connection failed: {err}") from err
+            status_code, headers, body = await _raw_http_get(
+                self.host, self.port, path, self.username, self.password
+            )
+            
+            if status_code == 401:
+                raise ISEEVYAuthError("Authentication failed")
+            if status_code == 404:
+                raise ISEEVYAPIError(f"Endpoint not found: {endpoint}")
+            if status_code >= 400:
+                raise ISEEVYAPIError(f"HTTP {status_code}: {body.decode('utf-8', errors='replace')}")
+            
+            # Decode body
+            text = body.decode('utf-8', errors='replace')
+            return text
+            
         except asyncio.TimeoutError as err:
             raise ISEEVYConnectionError(f"Timeout: {err}") from err
+        except (ConnectionError, OSError) as err:
+            raise ISEEVYConnectionError(f"Connection failed: {err}") from err
 
     def _parse_xml(self, xml_text: str) -> dict[str, Any]:
         """Parse XML response into dict."""
