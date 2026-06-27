@@ -22,6 +22,31 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Monkey-patch aiohttp's HTTP parser to accept headers with spaces after field name
+# The ISEEVY decoder returns "Content- type: text/xml" (space after Content-)
+# This is invalid per RFC 7230 but we need to handle it
+
+# Increase the header line limit to handle malformed headers
+aiohttp.http_parser.MAX_LINE_SIZE = 16384
+aiohttp.http_parser.MAX_FIELD_SIZE = 16384
+
+# Patch the header parser to be more lenient
+_original_parse_headers = aiohttp.http_parser.HttpParser.parse_headers
+
+def _lenient_parse_headers(self, lines):
+    """Parse headers, fixing malformed 'Content- type' header."""
+    fixed_lines = []
+    for line in lines:
+        if isinstance(line, bytes):
+            line = line.decode('latin-1', errors='replace')
+        # Fix "Content- type" -> "Content-Type"
+        if line.startswith('Content- '):
+            line = line.replace('Content- ', 'Content-', 1)
+        fixed_lines.append(line.encode('latin-1') if isinstance(line, str) else line)
+    return _original_parse_headers(self, fixed_lines)
+
+aiohttp.http_parser.HttpParser.parse_headers = _lenient_parse_headers
+
 
 class ISEEVYAPIError(Exception):
     """Base exception for ISEEVY API errors."""
