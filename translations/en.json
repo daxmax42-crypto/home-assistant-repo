@@ -1,0 +1,38 @@
+{
+  "component": {
+    "iseevy_decoder": {
+      "name": "ISEEVY Video Decoder",
+      "description": "Integration for ISEEVY H.265/H.264 4K Video Decoder via local HTTP API",
+      "config_flow": {
+        "step": {
+          "user": {
+            "title": "Configure ISEEVY Decoder",
+            "description": "Enter the IP address and credentials for your ISEEVY decoder.",
+            "data": {
+              "host": "Host (IP Address)",
+              "username": "Username",
+              "password": "Password",
+              "port": "Port"
+            }
+          },
+          "reauth": {
+            "title": "Re-authenticate ISEEVY Decoder",
+            "description": "Authentication failed. Please update your credentials.",
+            "data": {
+              "username": "Username",
+              "password": "Password"
+            }
+          }
+        },
+        "error": {
+          "auth_failed": "Invalid username or password",
+          "cannot_connect": "Cannot connect to the decoder",
+          "unknown": "Unexpected error occurred"
+        },
+        "abort": {
+          "already_configured": "This decoder is already configured"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "domain": "iseevy_decoder",
+  "name": "ISEEVY Video Decoder",
+  "codeowners": ["@your-github-username"],
+  "config_flow": true,
+  "documentation": "https://github.com/your-github-username/iseevy_decoder",
+  "requirements": [],
+  "version": "1.0.0",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/your-github-username/iseevy_decoder/issues",
+  "homekit": {},
+  "dependencies": [],
+  "after_dependencies": []
+}

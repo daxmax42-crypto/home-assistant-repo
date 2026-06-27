@@ -1,0 +1,31 @@
+# Services for ISEEVY Video Decoder
+
+select_stream:
+  name: "Select Stream"
+  description: "Switch the decoder to a specific pre-configured stream by index"
+  fields:
+    stream_index:
+      name: "Stream Index"
+      description: "1-based index of the stream to select (1-30)"
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          mode: slider
+
+set_volume:
+  name: "Set Volume"
+  description: "Set the decoder output volume"
+  fields:
+    volume:
+      name: "Volume Level"
+      description: "Volume percentage (0-100)"
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 1
+          mode: slider
