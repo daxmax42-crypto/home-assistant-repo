@@ -80,18 +80,46 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
                     key = 'Content-Type'
                 headers[key.lower()] = value
         
-        # Read body
+        # Read body - handle both Content-Length and Transfer-Encoding: chunked
         body = b''
-        content_length = headers.get('content-length')
-        if content_length:
-            try:
-                length = int(content_length)
-                body = await asyncio.wait_for(reader.readexactly(length), timeout=timeout)
-            except (ValueError, asyncio.IncompleteReadError):
-                body = await reader.read()
+        transfer_encoding = headers.get('transfer-encoding', '').lower()
+        
+        if 'chunked' in transfer_encoding:
+            # Handle chunked transfer encoding
+            body = b''
+            while True:
+                # Read chunk size line
+                chunk_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+                if not chunk_line:
+                    break
+                chunk_line = chunk_line.decode('latin-1', errors='replace').strip()
+                if not chunk_line:
+                    continue
+                try:
+                    chunk_size = int(chunk_line, 16)
+                except ValueError:
+                    break
+                if chunk_size == 0:
+                    # Last chunk - read trailing CRLF
+                    await reader.readline()
+                    break
+                # Read chunk data
+                chunk_data = await asyncio.wait_for(reader.readexactly(chunk_size), timeout=timeout)
+                body += chunk_data
+                # Read trailing CRLF after chunk
+                await reader.readline()
         else:
-            # No content-length, read until EOF
-            body = await reader.read()
+            # Handle Content-Length or read until EOF
+            content_length = headers.get('content-length')
+            if content_length:
+                try:
+                    length = int(content_length)
+                    body = await asyncio.wait_for(reader.readexactly(length), timeout=timeout)
+                except (ValueError, asyncio.IncompleteReadError):
+                    body = await reader.read()
+            else:
+                # No content-length, read until EOF
+                body = await reader.read()
         
         return status_code, headers, body
         
