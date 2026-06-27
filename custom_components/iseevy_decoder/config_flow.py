@@ -12,10 +12,9 @@ from homeassistant.const import (
     CONF_PASSWORD,
     CONF_PORT,
     CONF_USERNAME,
-    DEFAULT_PORT,
-    DEFAULT_USERNAME,
 )
 
+from .const import DEFAULT_PORT, DEFAULT_USERNAME
 from .api import ISEEVYClient, ISEEVYAuthError, ISEEVYConnectionError
 
 _LOGGER = logging.getLogger(__name__)
