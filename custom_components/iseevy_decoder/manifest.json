@@ -1,13 +1,13 @@
 {
   "domain": "iseevy_decoder",
   "name": "ISEEVY Video Decoder",
-  "codeowners": ["@your-github-username"],
+  "codeowners": ["@daxmax42-crypto"],
   "config_flow": true,
-  "documentation": "https://github.com/your-github-username/iseevy_decoder",
+  "documentation": "https://github.com/daxmax42-crypto/home-assistant-repo",
   "requirements": [],
   "version": "1.0.0",
   "iot_class": "local_polling",
-  "issue_tracker": "https://github.com/your-github-username/iseevy_decoder/issues",
+  "issue_tracker": "https://github.com/daxmax42-crypto/home-assistant-repo/issues",
   "homekit": {},
   "dependencies": [],
   "after_dependencies": []
