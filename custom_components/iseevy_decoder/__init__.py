@@ -18,6 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.NUMBER,
+    Platform.SELECT,
 ]
 
 
@@ -45,6 +46,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Register services
+    async def async_select_stream(call):
+        """Handle select_stream service call."""
+        stream_index = call.data.get("stream_index")
+        stream_name = call.data.get("stream_name")
+        
+        if stream_index is not None:
+            success = await coordinator.async_select_stream(stream_index)
+        elif stream_name is not None:
+            success = await coordinator.async_select_stream_by_name(stream_name)
+        else:
+            _LOGGER.error("Either stream_index or stream_name must be provided")
+            return
+        
+        if success:
+            await coordinator.async_request_refresh()
+        else:
+            _LOGGER.error("Failed to select stream")
+
+    hass.services.async_register(
+        DOMAIN,
+        "select_stream",
+        async_select_stream,
+        schema=None,  # Schema defined in services.yaml
+    )
+
     return True
 
 
@@ -52,5 +79,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     coordinator = hass.data[DOMAIN].pop(entry.entry_id)
     await coordinator.async_shutdown()
-
+    hass.services.async_remove(DOMAIN, "select_stream")
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

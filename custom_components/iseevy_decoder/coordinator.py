@@ -67,6 +67,24 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
             _LOGGER.error("Failed to select stream: %s", err)
             return False
 
+    async def async_select_stream_by_name(self, stream_name: str) -> bool:
+        """Select a stream on the decoder by name."""
+        try:
+            # Get current streams to find index by name
+            data = await self.client.get_all_data()
+            streams = data.get("streams", [])
+            
+            # Find stream by name (case-insensitive exact match)
+            for stream in streams:
+                if stream.get("title", "").lower() == stream_name.lower():
+                    return await self.async_select_stream(stream["index"])
+            
+            _LOGGER.error("Stream with name '%s' not found", stream_name)
+            return False
+        except ISEEVYAPIError as err:
+            _LOGGER.error("Failed to select stream by name: %s", err)
+            return False
+
     async def async_shutdown(self) -> None:
         """Shutdown the client."""
         await self.client.close()

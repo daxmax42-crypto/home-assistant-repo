@@ -2,18 +2,24 @@
 
 select_stream:
   name: "Select Stream"
-  description: "Switch the decoder to a specific pre-configured stream by index"
+  description: "Switch the decoder to a specific pre-configured stream by index or name"
   fields:
     stream_index:
       name: "Stream Index"
       description: "1-based index of the stream to select (1-30)"
-      required: true
+      required: false
       selector:
         number:
           min: 1
           max: 30
           step: 1
           mode: slider
+    stream_name:
+      name: "Stream Name"
+      description: "Name of the stream to select (exact match)"
+      required: false
+      selector:
+        text:
 
 set_volume:
   name: "Set Volume"
