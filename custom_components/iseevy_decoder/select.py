@@ -73,7 +73,7 @@ class ISEEVYStreamSelect(CoordinatorEntity, SelectEntity):
         try:
             # Extract index from option string (format: "1: Stream Name")
             stream_index = int(option.split(":")[0].strip())
-            success = await self.coordinator.async_set_stream(stream_index)
+            success = await self.coordinator.async_select_stream(stream_index)
             if success:
                 await self.coordinator.async_request_refresh()
             else:
