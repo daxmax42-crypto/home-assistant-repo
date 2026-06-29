@@ -330,6 +330,10 @@ class ISEEVYClient:
 
             raise ISEEVYAPIError(f"Failed to set stream to {stream_index}")
 
+    async def select_stream(self, stream_index: int) -> bool:
+        """Switch to a specific stream by index (1-based). Alias for set_stream."""
+        return await self.set_stream(stream_index)
+
     async def set_volume(self, volume: int) -> bool:
         """Set volume (0-100)."""
         if not 0 <= volume <= 100:
