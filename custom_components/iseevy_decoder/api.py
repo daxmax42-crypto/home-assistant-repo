@@ -25,19 +25,19 @@ _LOGGER = logging.getLogger(__name__)
 
 async def _raw_http_get(host: str, port: int, path: str, username: str, password: str, timeout: int = 10) -> tuple[int, dict[str, str], bytes]:
     """Perform raw HTTP GET request, handling malformed headers from ISEEVY decoder.
-    
+
     The ISEEVY decoder returns invalid headers like 'Content- type: text/xml'
     (space after Content-) which aiohttp's strict parser rejects.
     This function reads raw HTTP response and parses headers leniently.
     """
     import base64
-    
+
     # Create connection
     reader, writer = await asyncio.wait_for(
         asyncio.open_connection(host, port),
         timeout=timeout
     )
-    
+
     try:
         # Build request
         auth = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -49,21 +49,21 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
             f"User-Agent: HomeAssistant-ISEEVY/1.0\r\n"
             f"\r\n"
         )
-        
+
         writer.write(request.encode())
         await writer.drain()
-        
+
         # Read status line
         status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
         if not status_line:
             raise aiohttp.ClientConnectorError("Empty response", None)
-        
+
         status_line = status_line.decode('latin-1', errors='replace').strip()
         parts = status_line.split(' ', 2)
         if len(parts) < 2:
             raise aiohttp.ClientResponseError("Invalid status line", None)
         status_code = int(parts[1])
-        
+
         # Read headers leniently
         headers = {}
         while True:
@@ -79,11 +79,11 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
                 if key == 'Content-':
                     key = 'Content-Type'
                 headers[key.lower()] = value
-        
+
         # Read body - handle both Content-Length and Transfer-Encoding: chunked
         body = b''
         transfer_encoding = headers.get('transfer-encoding', '').lower()
-        
+
         if 'chunked' in transfer_encoding:
             # Handle chunked transfer encoding
             body = b''
@@ -120,9 +120,9 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
             else:
                 # No content-length, read until EOF
                 body = await reader.read()
-        
+
         return status_code, headers, body
-        
+
     finally:
         writer.close()
         await writer.wait_closed()
@@ -183,23 +183,23 @@ class ISEEVYClient:
             path = f"{endpoint}?{query}"
         else:
             path = endpoint
-        
+
         try:
             status_code, headers, body = await _raw_http_get(
                 self.host, self.port, path, self.username, self.password
             )
-            
+
             if status_code == 401:
                 raise ISEEVYAuthError("Authentication failed")
             if status_code == 404:
                 raise ISEEVYAPIError(f"Endpoint not found: {endpoint}")
             if status_code >= 400:
                 raise ISEEVYAPIError(f"HTTP {status_code}: {body.decode('utf-8', errors='replace')}")
-            
+
             # Decode body
             text = body.decode('utf-8', errors='replace')
             return text
-            
+
         except asyncio.TimeoutError as err:
             raise ISEEVYConnectionError(f"Timeout: {err}") from err
         except (ConnectionError, OSError) as err:
@@ -308,27 +308,31 @@ class ISEEVYClient:
         }
 
     async def set_stream(self, stream_index: int) -> bool:
-            """Switch to a specific stream by index (1-based)."""
-            if not 1 <= stream_index <= 30:
-                raise ValueError("Stream index must be 1-30")
+        """Switch to a specific stream by index (1-based)."""
+        if not 1 <= stream_index <= 30:
+            raise ValueError("Stream index must be 1-30")
 
-            # Correct endpoint format: /setpro.cgi?playindex=N&end
-            # NOT /setpro.cgi?pro=N (doesn't work)
+        # Device API uses 0-indexed playindex internally, but XML titles are 1-indexed
+        # Subtract 1 for the API call
+        api_index = stream_index - 1
+
+        # Correct endpoint format: /setpro.cgi?playindex=N&end
+        # NOT /setpro.cgi?pro=N (doesn't work)
+        try:
+            await self._request("/setpro.cgi", params={"playindex": str(api_index), "end": ""})
+            return True
+        except ISEEVYAPIError:
+            pass
+
+        # Fallback to alternative endpoints if needed
+        for endpoint in ["/setpro.cgi", "/set.cgi"]:
             try:
-                await self._request("/setpro.cgi", params={"playindex": str(stream_index), "end": ""})
+                await self._request(endpoint, params={"pro": str(stream_index)})
                 return True
             except ISEEVYAPIError:
-                pass
+                continue
 
-            # Fallback to alternative endpoints if needed
-            for endpoint in ["/setpro.cgi", "/set.cgi"]:
-                try:
-                    await self._request(endpoint, params={"pro": str(stream_index)})
-                    return True
-                except ISEEVYAPIError:
-                    continue
-
-            raise ISEEVYAPIError(f"Failed to set stream to {stream_index}")
+        raise ISEEVYAPIError(f"Failed to set stream to {stream_index}")
 
     async def select_stream(self, stream_index: int) -> bool:
         """Switch to a specific stream by index (1-based). Alias for set_stream."""
@@ -346,7 +350,7 @@ class ISEEVYClient:
                 return True
             except ISEEVYAPIError:
                 continue
-        
+
         raise ISEEVYAPIError(f"Failed to set volume to {volume}")
 
     async def get_all_data(self) -> dict[str, Any]:
