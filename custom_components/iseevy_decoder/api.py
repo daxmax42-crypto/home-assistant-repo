@@ -339,19 +339,44 @@ class ISEEVYClient:
         return await self.set_stream(stream_index)
 
     async def set_volume(self, volume: int) -> bool:
-        """Set volume (0-100)."""
+        """Set volume (0-100). Device requires full config update via /set.cgi."""
         if not 0 <= volume <= 100:
             raise ValueError("Volume must be 0-100")
 
-        # Try common set volume endpoints
-        for endpoint in ["/setvol.cgi", "/set.cgi"]:
-            try:
-                await self._request(endpoint, params={"vol": str(volume)})
-                return True
-            except ISEEVYAPIError:
-                continue
+        # Fetch current full config from /get.cgi
+        try:
+            xml_text = await self._request(ENDPOINT_GET)
+            data = self._parse_xml(xml_text)
+        except ISEEVYAPIError as err:
+            raise ISEEVYAPIError(f"Failed to get current config for volume update: {err}") from err
 
-        raise ISEEVYAPIError(f"Failed to set volume to {volume}")
+        # Build full config with new volume
+        # All params from the device's /get.cgi response
+        config_params = {
+            "rtspover": data.get("rtspover", "0"),
+            "showtime": data.get("showtime", "0"),
+            "timezone_ew": data.get("timezone_ew", "0"),
+            "timezone": data.get("timezone", "8"),
+            "autoreboot_status": data.get("autoreboot_status", "0"),
+            "autoreboot_time": data.get("autoreboot_time", "30"),
+            "lunbo_status": data.get("lunbo_status", "0"),
+            "lunbo_time": data.get("lunbo_time", "30"),
+            "dhcp": data.get("dhcp", "1"),
+            "lowdelay_mode": data.get("lowdelay_mode", "0"),
+            "format_type": data.get("format_type", "0"),
+            "aspect": data.get("aspect", "2"),
+            "language": data.get("language", "1"),
+            "volume": str(volume),
+            "udp_buf": data.get("udp_buf", "3"),
+            "normal_buf": data.get("normal_buf", "20"),
+        }
+
+        # Send full config to /set.cgi
+        try:
+            await self._request("/set.cgi", params=config_params)
+            return True
+        except ISEEVYAPIError as err:
+            raise ISEEVYAPIError(f"Failed to set volume to {volume}: {err}") from err
 
     async def get_all_data(self) -> dict[str, Any]:
         """Get all data in one call."""
