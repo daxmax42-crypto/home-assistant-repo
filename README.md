@@ -38,7 +38,7 @@ Custom integration for **ISEEVY H.265/H.264 4K Video Decoder** (and compatible r
 1. Go to **Settings → Devices & Services → Add Integration**
 2. Search for "ISEEVY Video Decoder"
 3. Enter:
-   - **Host**: IP address of your decoder (e.g., `10.0.100.245`)
+   - **Host**: IP address of your decoder (e.g., `192.168.x.x`)
    - **Username**: `admin` (default)
    - **Password**: Your web interface password
    - **Port**: `80` (default)
@@ -78,7 +78,7 @@ To change streams, use the **Developer Tools → Services** → `iseevy_decoder.
 
 - `GET /get.cgi` - System information (XML)
 - `GET /getpro.cgi` - Stream configuration (XML)
-- `GET /setpro.cgi?pro=N` - Switch to stream N
+- `GET /setpro.cgi?playindex=N&end` - Switch to stream N
 - `GET /setvol.cgi?vol=N` - Set volume (0-100)
 
 ## Security Notes
