@@ -350,25 +350,30 @@ class ISEEVYClient:
         except ISEEVYAPIError as err:
             raise ISEEVYAPIError(f"Failed to get current config for volume update: {err}") from err
 
+        # Validate/clean values from device (it returns corrupted XML sometimes)
+        def clean_val(key: str, valid_values: set[str], default: str) -> str:
+            val = data.get(key, "")
+            return val if val in valid_values else default
+
         # Build full config with new volume
-        # All params from the device's /get.cgi response
+        # Use validation to prevent device corruption from changing settings
         config_params = {
-            "rtspover": data.get("rtspover", "0"),
-            "showtime": data.get("showtime", "0"),
-            "timezone_ew": data.get("timezone_ew", "0"),
-            "timezone": data.get("timezone", "8"),
-            "autoreboot_status": data.get("autoreboot_status", "0"),
-            "autoreboot_time": data.get("autoreboot_time", "30"),
-            "lunbo_status": data.get("lunbo_status", "0"),
-            "lunbo_time": data.get("lunbo_time", "30"),
-            "dhcp": data.get("dhcp", "1"),
-            "lowdelay_mode": data.get("lowdelay_mode", "0"),
-            "format_type": data.get("format_type", "0"),
-            "aspect": data.get("aspect", "2"),
-            "language": data.get("language", "1"),
+            "rtspover": clean_val("rtspover", {"0", "1"}, "0"),
+            "showtime": clean_val("showtime", {"0", "1"}, "0"),
+            "timezone_ew": clean_val("timezone_ew", {"0", "1"}, "0"),
+            "timezone": clean_val("timezone", {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}, "8"),
+            "autoreboot_status": clean_val("autoreboot_status", {"0", "1"}, "0"),
+            "autoreboot_time": clean_val("autoreboot_time", set(str(i) for i in range(24)), "30"),
+            "lunbo_status": clean_val("lunbo_status", {"0", "1"}, "0"),
+            "lunbo_time": clean_val("lunbo_time", set(str(i) for i in range(60)), "30"),
+            "dhcp": clean_val("dhcp", {"0", "1"}, "1"),
+            "lowdelay_mode": clean_val("lowdelay_mode", {"0", "1"}, "0"),
+            "format_type": clean_val("format_type", set(str(i) for i in range(17)), "0"),
+            "aspect": clean_val("aspect", {"0", "1", "2"}, "2"),
+            "language": clean_val("language", {"0", "1"}, "1"),  # 0=Chinese, 1=English
             "volume": str(volume),
-            "udp_buf": data.get("udp_buf", "3"),
-            "normal_buf": data.get("normal_buf", "20"),
+            "udp_buf": clean_val("udp_buf", set(str(i) for i in range(41)), "3"),
+            "normal_buf": clean_val("normal_buf", set(str(i) for i in range(41)), "20"),
         }
 
         # Send full config to /set.cgi
