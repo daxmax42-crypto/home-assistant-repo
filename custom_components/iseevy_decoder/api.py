@@ -293,30 +293,42 @@ class ISEEVYClient:
                     "index": i,
                     "title": title,
                     "url": url,
-                    "is_current": str(i) == current_title,
+                    # Note: curplay_title is UNRELIABLE (always returns "1")
+                    # Mark as current only if we have external confirmation
+                    "is_current": False,
                 })
             i += 1
 
         return {
             "streams": streams,
-            "current_stream_index": int(current_title) if current_title.isdigit() else None,
+            # curplay_title is UNRELIABLE - always returns "1" (Sunba Main)
+            # Do not trust it for current stream detection
+            "current_stream_index": None,
             "current_stream_url": current_url,
         }
 
     async def set_stream(self, stream_index: int) -> bool:
-        """Switch to a specific stream by index (1-based)."""
-        if not 1 <= stream_index <= 30:
-            raise ValueError("Stream index must be 1-30")
+            """Switch to a specific stream by index (1-based)."""
+            if not 1 <= stream_index <= 30:
+                raise ValueError("Stream index must be 1-30")
 
-        # Try common set stream endpoints
-        for endpoint in ["/setpro.cgi", "/set.cgi"]:
+            # Correct endpoint format: /setpro.cgi?playindex=N&end
+            # NOT /setpro.cgi?pro=N (doesn't work)
             try:
-                await self._request(endpoint, params={"pro": str(stream_index)})
+                await self._request("/setpro.cgi", params={"playindex": str(stream_index), "end": ""})
                 return True
             except ISEEVYAPIError:
-                continue
-        
-        raise ISEEVYAPIError(f"Failed to set stream to {stream_index}")
+                pass
+
+            # Fallback to alternative endpoints if needed
+            for endpoint in ["/setpro.cgi", "/set.cgi"]:
+                try:
+                    await self._request(endpoint, params={"pro": str(stream_index)})
+                    return True
+                except ISEEVYAPIError:
+                    continue
+
+            raise ISEEVYAPIError(f"Failed to set stream to {stream_index}")
 
     async def set_volume(self, volume: int) -> bool:
         """Set volume (0-100)."""
