@@ -34,6 +34,8 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
             password=entry.data[CONF_PASSWORD],
             port=entry.data.get(CONF_PORT, DEFAULT_PORT),
         )
+        # Cache last selected stream since device can't report it reliably
+        self._last_selected_stream: int | None = None
         super().__init__(
             hass,
             _LOGGER,
@@ -41,10 +43,21 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
 
+    @property
+    def last_selected_stream(self) -> int | None:
+        """Return the last selected stream index (1-based)."""
+        return self._last_selected_stream
+
+    def set_last_selected_stream(self, stream_index: int) -> None:
+        """Cache the last selected stream index."""
+        self._last_selected_stream = stream_index
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from API."""
         try:
             data = await self.client.get_all_data()
+            # Add cached last selected stream to data for select entity
+            data["last_selected_stream"] = self._last_selected_stream
             return data
         except ISEEVYAPIError as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
@@ -62,6 +75,8 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
         """Select a stream on the decoder."""
         try:
             await self.client.select_stream(stream_index)
+            # Cache the selection since device can't report current stream
+            self._last_selected_stream = stream_index
             return True
         except ISEEVYAPIError as err:
             _LOGGER.error("Failed to select stream: %s", err)
@@ -73,12 +88,12 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
             # Get current streams to find index by name
             data = await self.client.get_all_data()
             streams = data.get("streams", [])
-            
+
             # Find stream by name (case-insensitive exact match)
             for stream in streams:
                 if stream.get("title", "").lower() == stream_name.lower():
                     return await self.async_select_stream(stream["index"])
-            
+
             _LOGGER.error("Stream with name '%s' not found", stream_name)
             return False
         except ISEEVYAPIError as err:

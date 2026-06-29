@@ -39,7 +39,6 @@ async def async_setup_entry(
         ISEEVYIPAddressSensor(coordinator, entry),
         ISEEVYMACAddressSensor(coordinator, entry),
         ISEEVYVolumeSensor(coordinator, entry),
-        ISEEVYCurrentStreamSensor(coordinator, entry),
         ISEEVYStreamCountSensor(coordinator, entry),
         ISEEVDHCPEnabledSensor(coordinator, entry),
         ISEEVAutoRebootSensor(coordinator, entry),
@@ -115,12 +114,12 @@ class ISEEVYAspectRatioSensor(ISEEVYBaseSensor):
     """Aspect ratio sensor."""
 
     def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "aspect", "Aspect Ratio")
+        super().__init__(coordinator, entry, "aspect_ratio", "Aspect Ratio")
         self._attr_icon = "mdi:crop"
 
     @property
     def native_value(self) -> str | None:
-        return self.coordinator.data.get("aspect") if self.coordinator.data else None
+        return self.coordinator.data.get("aspect_ratio") if self.coordinator.data else None
 
 
 class ISEEVYLanguageSensor(ISEEVYBaseSensor):
@@ -189,38 +188,6 @@ class ISEEVYVolumeSensor(ISEEVYBaseSensor):
     @property
     def native_value(self) -> int | None:
         return self.coordinator.data.get("volume") if self.coordinator.data else None
-
-
-class ISEEVYCurrentStreamSensor(ISEEVYBaseSensor):
-    """Current stream sensor."""
-
-    def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "current_stream", "Current Stream")
-        self._attr_icon = "mdi:video-input-hdmi"
-
-    @property
-    def native_value(self) -> str | None:
-        if not self.coordinator.data:
-            return None
-        streams = self.coordinator.data.get("streams", [])
-        current_idx = self.coordinator.data.get("current_stream_index")
-        if current_idx and 1 <= current_idx <= len(streams):
-            return streams[current_idx - 1]["title"]
-        return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        if not self.coordinator.data:
-            return None
-        streams = self.coordinator.data.get("streams", [])
-        current_idx = self.coordinator.data.get("current_stream_index")
-        if current_idx and 1 <= current_idx <= len(streams):
-            stream = streams[current_idx - 1]
-            return {
-                "stream_index": current_idx,
-                "stream_url": stream["url"],
-            }
-        return None
 
 
 class ISEEVYStreamCountSensor(ISEEVYBaseSensor):

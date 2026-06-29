@@ -62,7 +62,8 @@ class ISEEVYStreamSelect(CoordinatorEntity, SelectEntity):
         if not self.coordinator.data:
             return None
         streams = self.coordinator.data.get("streams", [])
-        current_idx = self.coordinator.data.get("current_stream_index")
+        # Use cached last selected stream since device can't report current stream
+        current_idx = self.coordinator.data.get("last_selected_stream")
         if current_idx and 1 <= current_idx <= len(streams):
             stream = streams[current_idx - 1]
             return f"{stream['index']}: {stream['title']}"
