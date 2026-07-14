@@ -238,7 +238,7 @@ class ISEEVYLastVerifiedChannelSensor(ISEEVYBaseSensor):
             "peer_ip": lv.get("peer_ip"),
             "index": lv.get("index"),
             "title": lv.get("title"),
-            "verified_via": lv.get("verified_via", "netstat"),
+            "verified_via": lv.get("verified_via"),  # None = genuinely no match; do not fake "netstat"
         }
 
 

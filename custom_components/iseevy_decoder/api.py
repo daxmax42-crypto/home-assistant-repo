@@ -49,7 +49,7 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
             f"Host: {host}:{port}\r\n"
             f"Authorization: Basic {auth}\r\n"
             f"Connection: close\r\n"
-            f"User-Agent: HomeAssistant-ISEEVY/1.0.15\r\n"
+            f"User-Agent: HomeAssistant-ISEEVY/1.0.16\r\n"
             f"\r\n"
         )
 
@@ -346,30 +346,31 @@ class ISEEVYClient:
     async def verify_channel(self) -> dict[str, object]:
         """Determine the REAL current channel via ground truth (not the unreliable curplay_title).
 
-        Method (per embedded-device-truth-verification skill):
-          1. Read the ESTABLISHED RTSP peer IP from netstat (which stream is wired).
-          2. Read /mnt/pro.ini (app OUTPUT file) — its curplay_url/curplay_title are the
-             decoder's own record of the live stream and disambiguate hosts that back multiple
-             channels (10.0.100.53 -> ch2/3/4/17/28; 10.0.100.54 -> ch14/15/25/26).
-          3. Match the pro.ini curplay_url against the configured stream URLs.
+        Priority (per embedded-device-truth-verification skill), last-wins on confidence:
+          1. /mnt/pro.ini (app OUTPUT file) — the decoder's OWN record of what it is decoding.
+             Available even when there is NO ESTABLISHED RTSP socket (e.g. play-error loop),
+             so it MUST be checked first, not gated behind netstat.
+          2. Credential-insensitive URL match: pro.ini carries admin:pass@; configured stream
+             URLs usually do not — compare host+path, ignoring userinfo.
+          3. netstat ESTABLISHED peer IP — tertiary, only disambiguates the wired host.
 
-        Returns {"peer_ip", "index", "title", "verified_via"}. If the peer is on a shared host
-        and pro.ini match succeeds, verified_via="pro.ini"; otherwise "netstat" (ambiguous on
-        shared hosts) or None.
+        Returns {"peer_ip", "index", "title", "verified_via"}. verified_via is "pro.ini"
+        when the pro.ini title/URL matched a configured stream, "netstat" when only the
+        ESTABLISHED peer matched (ambiguous on shared hosts), or None when nothing matched.
         """
+        # Compare two RTSP URLs ignoring embedded credentials (user:pass@).
+        def _url_host_path(u: str) -> str:
+            return re.sub(r"//[^@/]+@", "//", u.strip())
+
         try:
             await self.telnet.connect()
+            # Netstat is tertiary — gather it but do NOT bail on an empty result.
             peer = await self.telnet.get_rtsp_peer()
-            if not peer:
-                return {
-                    "peer_ip": None,
-                    "index": None,
-                    "title": None,
-                    "verified_via": None,
-                }
+
             streams_data = await self.get_streams()
             streams = streams_data.get("streams", [])
-            # Primary: pro.ini curplay_url is the device's own ground truth for the live stream.
+
+            # PRIMARY: pro.ini is the decoder's own record of the live stream.
             pro = await self.telnet.read_pro_ini()
             cur_url = None
             cur_title = None
@@ -378,34 +379,49 @@ class ISEEVYClient:
                     cur_url = ln.split("=", 1)[1].strip()
                 elif ln.startswith("curplay_title="):
                     cur_title = ln.split("=", 1)[1].strip()
-            if cur_url:
+
+            # 1a) Title match (most reliable: pro.ini curplay_title is the device's label).
+            if cur_title:
                 for s in streams:
-                    if s.get("url", "") and s["url"].strip() == cur_url:
+                    if s.get("title", "").strip() == cur_title:
                         return {
                             "peer_ip": peer,
                             "index": s["index"],
                             "title": s["title"],
                             "verified_via": "pro.ini",
                         }
-            # Fallback: netstat peer IP -> first stream whose URL host matches.
-            for s in streams:
-                url = s.get("url", "")
-                host = re.search(r"rtsp://[^@]*@?([\d.]+):", url) or re.search(
-                    r"//([\d.]+):", url
-                )
-                if host and host.group(1) == peer:
-                    return {
-                        "peer_ip": peer,
-                        "index": s["index"],
-                        "title": s["title"],
-                        "verified_via": "netstat",
-                    }
-            # Peer known but no stream matched (e.g. transient / unknown host).
+            # 1b) Credential-insensitive URL match (handles admin:pass@ on pro.ini side).
+            if cur_url:
+                target = _url_host_path(cur_url)
+                for s in streams:
+                    s_url = s.get("url", "")
+                    if s_url and _url_host_path(s_url) == target:
+                        return {
+                            "peer_ip": peer,
+                            "index": s["index"],
+                            "title": s["title"],
+                            "verified_via": "pro.ini",
+                        }
+            # 2) Tertiary: ESTABLISHED netstat peer -> first stream whose URL host matches.
+            if peer:
+                for s in streams:
+                    url = s.get("url", "")
+                    host = re.search(r"rtsp://[^@]*@?([\d.]+):", url) or re.search(
+                        r"//([\d.]+):", url
+                    )
+                    if host and host.group(1) == peer:
+                        return {
+                            "peer_ip": peer,
+                            "index": s["index"],
+                            "title": s["title"],
+                            "verified_via": "netstat",
+                        }
+            # Genuinely nothing matched (no live stream / unknown source).
             return {
                 "peer_ip": peer,
                 "index": None,
                 "title": cur_title,
-                "verified_via": "netstat",
+                "verified_via": None,
             }
         except OSError as err:
             raise ISEEVYAPIError(f"Telnet verify failed: {err}") from err
