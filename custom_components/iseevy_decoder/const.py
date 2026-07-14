@@ -11,6 +11,12 @@ CONF_PORT = "port"
 # Defaults
 DEFAULT_PORT = 80
 DEFAULT_USERNAME = "admin"
+# The device's TELNET console uses a DIFFERENT credential than its web UI.
+# The web login (admin/0p3nd00r) logs into telnet but lands in a shell context
+# where the CTRL-C app-console break does NOT detach — so pro.ini reads fail and
+# verify_channel returns all-None. Telnet MUST use root/unisheen.
+DEFAULT_TELNET_USERNAME = "root"
+DEFAULT_TELNET_PASSWORD = "unisheen"
 DEFAULT_SCAN_INTERVAL = 30  # seconds
 
 # API Endpoints

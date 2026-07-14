@@ -13,6 +13,8 @@ from .const import (
     ENDPOINT_GETPRO,
     DEFAULT_PORT,
     DEFAULT_USERNAME,
+    DEFAULT_TELNET_USERNAME,
+    DEFAULT_TELNET_PASSWORD,
     PLAY_STATUS_MAP,
     FORMAT_TYPE_MAP,
     ASPECT_MAP,
@@ -49,7 +51,7 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
             f"Host: {host}:{port}\r\n"
             f"Authorization: Basic {auth}\r\n"
             f"Connection: close\r\n"
-            f"User-Agent: HomeAssistant-ISEEVY/1.0.17\r\n"
+            f"User-Agent: HomeAssistant-ISEEVY/1.0.18\r\n"
             f"\r\n"
         )
 
@@ -156,16 +158,27 @@ class ISEEVYClient:
         password: str = "",
         port: int = DEFAULT_PORT,
         session: aiohttp.ClientSession | None = None,
+        telnet_username: str = DEFAULT_TELNET_USERNAME,
+        telnet_password: str = DEFAULT_TELNET_PASSWORD,
     ) -> None:
-        """Initialize the client."""
+        """Initialize the client.
+
+        Web UI and telnet console use DIFFERENT credentials on this device. The
+        coordinator passes the web creds; we keep those for HTTP but construct the
+        telnet client with the device's actual console login (root/unisheen by
+        default). Passing web creds to telnet logs in but lands in a shell context
+        where the CTRL-C app-console break fails, so pro.ini reads never run and
+        verify_channel returns all-None.
+        """
         self.host = host
         self.username = username
         self.password = password
         self.port = port
         self._session = session
         self._base_url = f"http://{host}:{port}"
-        # Safe telnet client for config writes (volume/settings) — never /set.cgi
-        self.telnet = ISEEVYTelnetClient(host, username, password)
+        # Safe telnet client for config writes (volume/settings) — never /set.cgi.
+        # Uses the device's TELNET console creds, NOT the web creds.
+        self.telnet = ISEEVYTelnetClient(host, telnet_username, telnet_password)
         # Serialize all telnet access. The device has a single console; the coordinator
         # poll (getpro.cgi over HTTP) and verify_channel (telnet) both drive the box
         # concurrently, and the timing-sensitive telnet shell-break (CTRL-C x2 -> sentinel
