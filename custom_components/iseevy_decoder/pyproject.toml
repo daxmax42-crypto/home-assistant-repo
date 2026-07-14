@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "iseevy_decoder"
-version = "1.0.14"
+version = "1.0.15"
 description = "Home Assistant custom component for ISEEVY Video Decoder"
 readme = "README.md"
 license = {text = "MIT"}

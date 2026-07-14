@@ -70,13 +70,20 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Error communicating with API: {err}") from err
 
     async def async_set_volume(self, volume: int) -> bool:
-        """Set volume on the decoder."""
+        """Set volume on the decoder (safe telnet cfg.ini write). Push update immediately."""
         try:
             await self.client.set_volume(volume)
-            return True
         except ISEEVYAPIError as err:
             _LOGGER.error("Failed to set volume: %s", err)
             return False
+        # Push immediately so number/volume sensor update on HA 2026.x
+        # (async_request_refresh is coalesced with the scheduled poll and the write
+        #  never propagates; async_set_updated_data forces an immediate push).
+        if self.data:
+            current = dict(self.data)
+            current["volume"] = volume
+            self.async_set_updated_data(current)
+        return True
 
     async def async_verify_channel(self) -> dict[str, object]:
         """Poll real channel via netstat (ground truth).
@@ -95,7 +102,17 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
         if isinstance(idx, int):
             # Reflect verified channel in the dropdown without a setpro.cgi call
             self._last_selected_stream = idx
-        await self.async_request_refresh()
+        # Push immediately so the Last Verified Channel sensor + dropdown update NOW.
+        # On HA 2026.x async_request_refresh() is coalesced with the scheduled poll and
+        # the verify result never propagates; async_set_updated_data forces a push.
+        if self.data:
+            current = dict(self.data)
+            current["last_verified_channel"] = self._last_verified
+            current["last_selected_stream"] = self._last_selected_stream
+            self.async_set_updated_data(current)
+        else:
+            # First refresh hasn't completed; cached values surface on next poll.
+            await self.async_request_refresh()
         return result
 
     async def async_set_setting(self, field: str, value: str, reboot: bool = False) -> bool:
@@ -114,15 +131,22 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
 
 
     async def async_select_stream(self, stream_index: int) -> bool:
-        """Select a stream on the decoder."""
+        """Select a stream on the decoder. Push updated selection immediately."""
         try:
             await self.client.select_stream(stream_index)
-            # Cache the selection since device can't report current stream
-            self._last_selected_stream = stream_index
-            return True
         except ISEEVYAPIError as err:
             _LOGGER.error("Failed to select stream: %s", err)
             return False
+        # Cache the selection since device can't report current stream
+        self._last_selected_stream = stream_index
+        # Push immediately so the Active Stream dropdown updates on HA 2026.x
+        if self.data:
+            current = dict(self.data)
+            current["last_selected_stream"] = self._last_selected_stream
+            self.async_set_updated_data(current)
+        else:
+            await self.async_request_refresh()
+        return True
 
     async def async_select_stream_by_name(self, stream_name: str) -> bool:
         """Select a stream on the decoder by name."""
