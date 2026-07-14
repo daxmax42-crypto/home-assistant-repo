@@ -36,6 +36,11 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
         )
         # Cache last selected stream since device can't report it reliably
         self._last_selected_stream: int | None = None
+        self._last_verified: dict[str, object] = {
+            "peer_ip": None,
+            "index": None,
+            "title": None,
+        }
         super().__init__(
             hass,
             _LOGGER,
@@ -58,6 +63,8 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
             data = await self.client.get_all_data()
             # Add cached last selected stream to data for select entity
             data["last_selected_stream"] = self._last_selected_stream
+            # Add last netstat-verified channel (off-site ground truth)
+            data["last_verified_channel"] = self._last_verified
             return data
         except ISEEVYAPIError as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
@@ -70,6 +77,41 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
         except ISEEVYAPIError as err:
             _LOGGER.error("Failed to set volume: %s", err)
             return False
+
+    async def async_verify_channel(self) -> dict[str, object]:
+        """Poll real channel via netstat (ground truth).
+
+        Updates `last_verified_channel` AND the dropdown's cached selection (so the
+        Active Stream dropdown reflects the verified channel) WITHOUT triggering a
+        channel change (no setpro.cgi call).
+        """
+        try:
+            result = await self.client.verify_channel()
+        except ISEEVYAPIError as err:
+            _LOGGER.error("Verify channel failed: %s", err)
+            return {"peer_ip": None, "index": None, "title": None}
+        self._last_verified = result
+        idx = result.get("index")
+        if isinstance(idx, int):
+            # Reflect verified channel in the dropdown without a setpro.cgi call
+            self._last_selected_stream = idx
+        await self.async_request_refresh()
+        return result
+
+    async def async_set_setting(self, field: str, value: str, reboot: bool = False) -> bool:
+        """Set a decoder config field safely (telnet cfg.ini edit, live-applied, no reboot).
+        Pass reboot=True only for network/DHCP settings the app reads at boot."""
+        try:
+            return await self.client.set_setting(field, value)
+        except ISEEVYAPIError as err:
+            _LOGGER.error("Set setting %s=%s failed: %s", field, value, err)
+            return False
+
+    @property
+    def last_verified_channel(self) -> dict[str, object]:
+        """Last netstat-verified channel (off-site ground truth)."""
+        return self._last_verified
+
 
     async def async_select_stream(self, stream_index: int) -> bool:
         """Select a stream on the decoder."""

@@ -35,3 +35,7 @@ set_volume:
           max: 100
           step: 1
           mode: slider
+
+verify_channel:
+  name: "Verify Channel"
+  description: "Poll the decoder for the real current channel via netstat (ground truth, off-site proxy)"

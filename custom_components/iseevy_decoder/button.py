@@ -27,6 +27,7 @@ async def async_setup_entry(
     async_add_entities([
         ISEEVYRefreshButton(coordinator, entry),
         ISEEVYRefreshChannelListButton(coordinator, entry),
+        ISEEVYVerifyChannelButton(coordinator, entry),
     ])
 
 
@@ -50,9 +51,32 @@ class ISEEVYRefreshButton(CoordinatorEntity, ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Press the button - refresh the coordinator."""
+        """Press the button - force refresh of channel list."""
+        # Force a full data fetch which will re-query /getpro.cgi
         await self.coordinator.async_request_refresh()
 
+
+class ISEEVYVerifyChannelButton(CoordinatorEntity, ButtonEntity):
+    """Button entity to poll the decoder for the REAL current channel via netstat."""
+
+    def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.entry_id}_verify_channel"
+        self._attr_name = "Verify Real Channel"
+        self._attr_icon = "mdi:radar"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, entry.entry_id)},
+            name=f"ISEEVY Decoder ({entry.data['host']})",
+            manufacturer=MANUFACTURER,
+            model=MODEL,
+            sw_version=SW_VERSION,
+            configuration_url=f"http://{entry.data['host']}",
+        )
+
+    async def async_press(self) -> None:
+        """Press the button - poll real channel via netstat (ground truth)."""
+        await self.coordinator.async_verify_channel()
 
 class ISEEVYRefreshChannelListButton(CoordinatorEntity, ButtonEntity):
     """Button entity to manually refresh the channel list from the decoder."""

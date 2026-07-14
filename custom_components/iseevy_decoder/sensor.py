@@ -38,11 +38,15 @@ async def async_setup_entry(
         ISEEVYRTSPTransportSensor(coordinator, entry),
         ISEEVYIPAddressSensor(coordinator, entry),
         ISEEVYMACAddressSensor(coordinator, entry),
+        ISEEVYNetmaskSensor(coordinator, entry),
+        ISEEVYGatewaySensor(coordinator, entry),
+        ISEEVYDNSSensor(coordinator, entry),
         ISEEVYVolumeSensor(coordinator, entry),
         ISEEVYStreamCountSensor(coordinator, entry),
         ISEEVDHCPEnabledSensor(coordinator, entry),
         ISEEVAutoRebootSensor(coordinator, entry),
         ISEEVYLowDelaySensor(coordinator, entry),
+        ISEEVYLastVerifiedChannelSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -172,6 +176,71 @@ class ISEEVYMACAddressSensor(ISEEVYBaseSensor):
     @property
     def native_value(self) -> str | None:
         return self.coordinator.data.get("mac_address") if self.coordinator.data else None
+
+
+class ISEEVYNetmaskSensor(ISEEVYBaseSensor):
+    """Netmask sensor."""
+
+    def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "netmask", "Netmask")
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_icon = "mdi:ip-network"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.data.get("netmask") if self.coordinator.data else None
+
+
+class ISEEVYGatewaySensor(ISEEVYBaseSensor):
+    """Gateway sensor."""
+
+    def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "gateway", "Gateway")
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_icon = "mdi:router-network"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.data.get("gateway") if self.coordinator.data else None
+
+
+class ISEEVYDNSSensor(ISEEVYBaseSensor):
+    """DNS sensor."""
+
+    def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "dns", "DNS")
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_icon = "mdi:dns"
+
+    @property
+    def native_value(self) -> str | None:
+        return self.coordinator.data.get("dns") if self.coordinator.data else None
+
+
+class ISEEVYLastVerifiedChannelSensor(ISEEVYBaseSensor):
+    """Last netstat-verified channel (off-site ground truth)."""
+
+    def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator, entry, "last_verified_channel", "Last Verified Channel")
+        self._attr_icon = "mdi:check-network"
+
+    @property
+    def native_value(self) -> str | None:
+        lv = self.coordinator.data.get("last_verified_channel") if self.coordinator.data else {}
+        if not lv:
+            return None
+        return lv.get("title") or lv.get("peer_ip") or None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        lv = self.coordinator.data.get("last_verified_channel") if self.coordinator.data else {}
+        return {
+            "peer_ip": lv.get("peer_ip"),
+            "index": lv.get("index"),
+            "title": lv.get("title"),
+            "verified_via": lv.get("verified_via", "netstat"),
+        }
+
 
 
 class ISEEVYVolumeSensor(ISEEVYBaseSensor):

@@ -31,6 +31,10 @@ async def async_setup_entry(
 
     async_add_entities([
         ISEEVYVolumeNumber(coordinator, entry),
+        ISEEVYTimezoneNumber(coordinator, entry),
+        ISEEVYAutoRebootTimeNumber(coordinator, entry),
+        ISEEVYLunboTimeNumber(coordinator, entry),
+        ISEEVYUdpBufferNumber(coordinator, entry),
     ])
 
 
@@ -78,3 +82,64 @@ class ISEEVYVolumeNumber(CoordinatorEntity, NumberEntity):
             await self.coordinator.async_request_refresh()
         else:
             _LOGGER.error("Failed to set volume to %d", volume_int)
+
+
+class _SettingNumber(CoordinatorEntity, NumberEntity):
+    """Number mirrored from a decoder numeric setting (telnet cfg.ini write)."""
+
+    def __init__(self, c, e, key, name, data_key, cfg_field, mn, mx, icon):
+        super().__init__(c)
+        self._entry = e
+        self._data_key = data_key
+        self._cfg_field = cfg_field
+        self._attr_unique_id = f"{e.entry_id}_{key}"
+        self._attr_name = name
+        self._attr_native_min_value = mn
+        self._attr_native_max_value = mx
+        self._attr_native_step = 1
+        self._attr_icon = icon
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, e.entry_id)},
+            name=f"ISEEVY Decoder ({e.data['host']})",
+            manufacturer=MANUFACTURER, model=MODEL, sw_version=SW_VERSION,
+            configuration_url=f"http://{e.data['host']}")
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data is not None
+
+    @property
+    def native_value(self):
+        if not self.coordinator.data:
+            return None
+        try:
+            return float(self.coordinator.data.get(self._data_key, 0))
+        except (ValueError, TypeError):
+            return None
+
+    async def async_set_native_value(self, value: float) -> None:
+        await self.coordinator.async_set_setting(self._cfg_field, str(int(value)))
+        await self.coordinator.async_request_refresh()
+
+
+class ISEEVYTimezoneNumber(_SettingNumber):
+    def __init__(self, c, e):
+        super().__init__(c, e, "timezone", "Time Zone", "timezone", "timezone", 0, 12, "mdi:earth")
+
+
+class ISEEVYAutoRebootTimeNumber(_SettingNumber):
+    def __init__(self, c, e):
+        super().__init__(c, e, "autoreboot_time", "Auto Reboot Time", "autoreboot_time",
+                         "autoreboot_time", 0, 23, "mdi:clock")
+
+
+class ISEEVYLunboTimeNumber(_SettingNumber):
+    def __init__(self, c, e):
+        super().__init__(c, e, "lunbo_time", "Channel Schedule Time", "lunbo_time",
+                         "lunbo_time", 0, 59, "mdi:timer")
+
+
+class ISEEVYUdpBufferNumber(_SettingNumber):
+    def __init__(self, c, e):
+        super().__init__(c, e, "udp_buffer", "UDP Video Buffer", "udp_buffer",
+                         "udp_buf", 1, 40, "mdi:buffer")

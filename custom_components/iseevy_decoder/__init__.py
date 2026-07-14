@@ -20,6 +20,7 @@ PLATFORMS: list[Platform] = [
     Platform.NUMBER,
     Platform.SELECT,
     Platform.BUTTON,
+    Platform.SWITCH,
 ]
 
 
@@ -73,6 +74,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=None,  # Schema defined in services.yaml
     )
 
+    async def async_set_volume(call):
+        """Set decoder volume (safe telnet cfg.ini write — never /set.cgi)."""
+        volume = call.data.get("volume")
+        if volume is None:
+            _LOGGER.error("volume is required for set_volume")
+            return
+        success = await coordinator.async_set_volume(int(volume))
+        if success:
+            await coordinator.async_request_refresh()
+        else:
+            _LOGGER.error("Failed to set volume to %d", volume)
+
+    hass.services.async_register(DOMAIN, "set_volume", async_set_volume, schema=None)
+
+    async def async_verify_channel(call):
+        """Poll the decoder for the real current channel via netstat (ground truth)."""
+        result = await coordinator.async_verify_channel()
+        _LOGGER.info("Verified channel: %s", result)
+
+    hass.services.async_register(
+        DOMAIN,
+        "verify_channel",
+        async_verify_channel,
+        schema=None,
+    )
+
     return True
 
 
@@ -81,4 +108,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = hass.data[DOMAIN].pop(entry.entry_id)
     await coordinator.async_shutdown()
     hass.services.async_remove(DOMAIN, "select_stream")
+    hass.services.async_remove(DOMAIN, "set_volume")
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

@@ -19,6 +19,7 @@ from .const import (
     LANGUAGE_MAP,
     RTSP_OVER_MAP,
 )
+from .telnet_client import ISEEVYTelnetClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,14 +40,16 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
     )
 
     try:
-        # Build request
+        # Build request. NOTE: the device calls this header "Authorization: Basic ***"
+        # ONLY in logged/echoed form — the real wire header must carry the credentials,
+        # otherwise FalconAdmin returns 401 and every read fails.
         auth = base64.b64encode(f"{username}:{password}".encode()).decode()
         request = (
             f"GET {path} HTTP/1.1\r\n"
             f"Host: {host}:{port}\r\n"
             f"Authorization: Basic {auth}\r\n"
             f"Connection: close\r\n"
-            f"User-Agent: HomeAssistant-ISEEVY/1.0\r\n"
+            f"User-Agent: HomeAssistant-ISEEVY/1.0.14\r\n"
             f"\r\n"
         )
 
@@ -161,6 +164,8 @@ class ISEEVYClient:
         self.port = port
         self._session = session
         self._base_url = f"http://{host}:{port}"
+        # Safe telnet client for config writes (volume/settings) — never /set.cgi
+        self.telnet = ISEEVYTelnetClient(host, username, password)
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -316,72 +321,117 @@ class ISEEVYClient:
         # Subtract 1 for the API call
         api_index = stream_index - 1
 
-        # Correct endpoint format: /setpro.cgi?playindex=N&end
-        # NOT /setpro.cgi?pro=N (doesn't work)
-        try:
-            await self._request("/setpro.cgi", params={"playindex": str(api_index), "end": ""})
-            return True
-        except ISEEVYAPIError:
-            pass
-
-        # Fallback to alternative endpoints if needed
-        for endpoint in ["/setpro.cgi", "/set.cgi"]:
-            try:
-                await self._request(endpoint, params={"pro": str(stream_index)})
-                return True
-            except ISEEVYAPIError:
-                continue
-
-        raise ISEEVYAPIError(f"Failed to set stream to {stream_index}")
+        # Correct endpoint format: /setpro.cgi?playindex=N&end (0-based)
+        # NOT /setpro.cgi?pro=N (doesn't work), and NEVER /set.cgi (corrupts cfg.ini).
+        await self._request("/setpro.cgi", params={"playindex": str(api_index), "end": ""})
+        return True
 
     async def select_stream(self, stream_index: int) -> bool:
         """Switch to a specific stream by index (1-based). Alias for set_stream."""
         return await self.set_stream(stream_index)
 
     async def set_volume(self, volume: int) -> bool:
-        """Set volume (0-100). Device requires full config update via /set.cgi."""
+        """Set volume SAFELY via telnet cfg.ini edit (NOT /set.cgi — it corrupts device)."""
         if not 0 <= volume <= 100:
             raise ValueError("Volume must be 0-100")
-
-        # Fetch current full config from /get.cgi
         try:
-            xml_text = await self._request(ENDPOINT_GET)
-            data = self._parse_xml(xml_text)
-        except ISEEVYAPIError as err:
-            raise ISEEVYAPIError(f"Failed to get current config for volume update: {err}") from err
-
-        # Validate/clean values from device (it returns corrupted XML sometimes)
-        def clean_val(key: str, valid_values: set[str], default: str) -> str:
-            val = data.get(key, "")
-            return val if val in valid_values else default
-
-        # Build full config with new volume
-        # Use validation to prevent device corruption from changing settings
-        config_params = {
-            "rtspover": clean_val("rtspover", {"0", "1"}, "0"),
-            "showtime": clean_val("showtime", {"0", "1"}, "0"),
-            "timezone_ew": clean_val("timezone_ew", {"0", "1"}, "0"),
-            "timezone": clean_val("timezone", {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"}, "8"),
-            "autoreboot_status": clean_val("autoreboot_status", {"0", "1"}, "0"),
-            "autoreboot_time": clean_val("autoreboot_time", set(str(i) for i in range(24)), "30"),
-            "lunbo_status": clean_val("lunbo_status", {"0", "1"}, "0"),
-            "lunbo_time": clean_val("lunbo_time", set(str(i) for i in range(60)), "30"),
-            "dhcp": clean_val("dhcp", {"0", "1"}, "1"),
-            "lowdelay_mode": clean_val("lowdelay_mode", {"0", "1"}, "0"),
-            "format_type": clean_val("format_type", set(str(i) for i in range(17)), "0"),
-            "aspect": clean_val("aspect", {"0", "1", "2"}, "2"),
-            "language": clean_val("language", {"0", "1"}, "1"),  # 0=Chinese, 1=English
-            "volume": str(volume),
-            "udp_buf": clean_val("udp_buf", set(str(i) for i in range(41)), "3"),
-            "normal_buf": clean_val("normal_buf", set(str(i) for i in range(41)), "20"),
-        }
-
-        # Send full config to /set.cgi
-        try:
-            await self._request("/set.cgi", params=config_params)
+            await self.telnet.connect()
+            await self.telnet.set_cfg_field("volume", str(volume))
             return True
-        except ISEEVYAPIError as err:
-            raise ISEEVYAPIError(f"Failed to set volume to {volume}: {err}") from err
+        except OSError as err:
+            raise ISEEVYAPIError(f"Telnet volume set failed: {err}") from err
+        finally:
+            await self.telnet.close()
+
+    async def verify_channel(self) -> dict[str, object]:
+        """Determine the REAL current channel via ground truth (not the unreliable curplay_title).
+
+        Method (per embedded-device-truth-verification skill):
+          1. Read the ESTABLISHED RTSP peer IP from netstat (which stream is wired).
+          2. Read /mnt/pro.ini (app OUTPUT file) — its curplay_url/curplay_title are the
+             decoder's own record of the live stream and disambiguate hosts that back multiple
+             channels (10.0.100.53 -> ch2/3/4/17/28; 10.0.100.54 -> ch14/15/25/26).
+          3. Match the pro.ini curplay_url against the configured stream URLs.
+
+        Returns {"peer_ip", "index", "title", "verified_via"}. If the peer is on a shared host
+        and pro.ini match succeeds, verified_via="pro.ini"; otherwise "netstat" (ambiguous on
+        shared hosts) or None.
+        """
+        try:
+            await self.telnet.connect()
+            peer = await self.telnet.get_rtsp_peer()
+            if not peer:
+                return {
+                    "peer_ip": None,
+                    "index": None,
+                    "title": None,
+                    "verified_via": None,
+                }
+            streams_data = await self.get_streams()
+            streams = streams_data.get("streams", [])
+            # Primary: pro.ini curplay_url is the device's own ground truth for the live stream.
+            pro = await self.telnet.read_pro_ini()
+            cur_url = None
+            cur_title = None
+            for ln in pro.splitlines():
+                if ln.startswith("curplay_url="):
+                    cur_url = ln.split("=", 1)[1].strip()
+                elif ln.startswith("curplay_title="):
+                    cur_title = ln.split("=", 1)[1].strip()
+            if cur_url:
+                for s in streams:
+                    if s.get("url", "") and s["url"].strip() == cur_url:
+                        return {
+                            "peer_ip": peer,
+                            "index": s["index"],
+                            "title": s["title"],
+                            "verified_via": "pro.ini",
+                        }
+            # Fallback: netstat peer IP -> first stream whose URL host matches.
+            for s in streams:
+                url = s.get("url", "")
+                host = re.search(r"rtsp://[^@]*@?([\d.]+):", url) or re.search(
+                    r"//([\d.]+):", url
+                )
+                if host and host.group(1) == peer:
+                    return {
+                        "peer_ip": peer,
+                        "index": s["index"],
+                        "title": s["title"],
+                        "verified_via": "netstat",
+                    }
+            # Peer known but no stream matched (e.g. transient / unknown host).
+            return {
+                "peer_ip": peer,
+                "index": None,
+                "title": cur_title,
+                "verified_via": "netstat",
+            }
+        except OSError as err:
+            raise ISEEVYAPIError(f"Telnet verify failed: {err}") from err
+        finally:
+            await self.telnet.close()
+
+    async def set_setting(self, field: str, value: str, reboot: bool = False) -> bool:
+        """Safe config write: edit one cfg.ini field (live-applied, no reboot needed).
+
+        NEVER /set.cgi (it corrupts the device). cfg.ini changes apply live — verified:
+        get.cgi reflects the new value immediately and the UI updates without reboot.
+        Pass reboot=True ONLY for settings the app reads solely at boot (e.g. dhcp /
+        box_ip / box_netmask / box_gateway / box_dns0 network changes).
+
+        field examples: 'format_type', 'aspect', 'language', 'rtspover',
+        'lowdelay_mode', 'showtime', 'timezone', 'timezone_ew',
+        'autoreboot_status', 'autoreboot_time', 'lunbo_status', 'lunbo_time', 'udp_buf'.
+        """
+        try:
+            await self.telnet.connect()
+            await self.telnet.set_cfg_field(field, value, reboot=reboot)
+            return True
+        except OSError as err:
+            raise ISEEVYAPIError(f"Telnet setting set failed: {err}") from err
+        finally:
+            await self.telnet.close()
 
     async def get_all_data(self) -> dict[str, Any]:
         """Get all data in one call."""
