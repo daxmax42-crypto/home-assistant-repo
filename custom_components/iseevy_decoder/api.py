@@ -49,7 +49,7 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
             f"Host: {host}:{port}\r\n"
             f"Authorization: Basic {auth}\r\n"
             f"Connection: close\r\n"
-            f"User-Agent: HomeAssistant-ISEEVY/1.0.16\r\n"
+            f"User-Agent: HomeAssistant-ISEEVY/1.0.17\r\n"
             f"\r\n"
         )
 
@@ -166,6 +166,12 @@ class ISEEVYClient:
         self._base_url = f"http://{host}:{port}"
         # Safe telnet client for config writes (volume/settings) — never /set.cgi
         self.telnet = ISEEVYTelnetClient(host, username, password)
+        # Serialize all telnet access. The device has a single console; the coordinator
+        # poll (getpro.cgi over HTTP) and verify_channel (telnet) both drive the box
+        # concurrently, and the timing-sensitive telnet shell-break (CTRL-C x2 -> sentinel
+        # echo) fails under that contention, yielding all-None verify results. One lock
+        # keeps the console single-owner.
+        self._telnet_lock = asyncio.Lock()
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -334,14 +340,15 @@ class ISEEVYClient:
         """Set volume SAFELY via telnet cfg.ini edit (NOT /set.cgi — it corrupts device)."""
         if not 0 <= volume <= 100:
             raise ValueError("Volume must be 0-100")
-        try:
-            await self.telnet.connect()
-            await self.telnet.set_cfg_field("volume", str(volume))
-            return True
-        except OSError as err:
-            raise ISEEVYAPIError(f"Telnet volume set failed: {err}") from err
-        finally:
-            await self.telnet.close()
+        async with self._telnet_lock:
+            try:
+                await self.telnet.connect()
+                await self.telnet.set_cfg_field("volume", str(volume))
+                return True
+            except OSError as err:
+                raise ISEEVYAPIError(f"Telnet volume set failed: {err}") from err
+            finally:
+                await self.telnet.close()
 
     async def verify_channel(self) -> dict[str, object]:
         """Determine the REAL current channel via ground truth (not the unreliable curplay_title).
@@ -354,6 +361,10 @@ class ISEEVYClient:
              URLs usually do not — compare host+path, ignoring userinfo.
           3. netstat ESTABLISHED peer IP — tertiary, only disambiguates the wired host.
 
+        All telnet access is serialized via self._telnet_lock (the device has a single
+        console shared with the coordinator poll). The connect+read is retried once because
+        the timing-sensitive shell-break can fail under concurrent device load.
+
         Returns {"peer_ip", "index", "title", "verified_via"}. verified_via is "pro.ini"
         when the pro.ini title/URL matched a configured stream, "netstat" when only the
         ESTABLISHED peer matched (ambiguous on shared hosts), or None when nothing matched.
@@ -362,16 +373,16 @@ class ISEEVYClient:
         def _url_host_path(u: str) -> str:
             return re.sub(r"//[^@/]+@", "//", u.strip())
 
-        try:
+        async def _attempt() -> dict[str, object]:
             await self.telnet.connect()
-            # Netstat is tertiary — gather it but do NOT bail on an empty result.
-            peer = await self.telnet.get_rtsp_peer()
+            try:
+                # Netstat is tertiary — gather it but do NOT bail on an empty result.
+                peer = await self.telnet.get_rtsp_peer()
+                # PRIMARY: pro.ini is the decoder's own record of the live stream.
+                pro = await self.telnet.read_pro_ini()
+            finally:
+                await self.telnet.close()
 
-            streams_data = await self.get_streams()
-            streams = streams_data.get("streams", [])
-
-            # PRIMARY: pro.ini is the decoder's own record of the live stream.
-            pro = await self.telnet.read_pro_ini()
             cur_url = None
             cur_title = None
             for ln in pro.splitlines():
@@ -423,10 +434,38 @@ class ISEEVYClient:
                 "title": cur_title,
                 "verified_via": None,
             }
-        except OSError as err:
-            raise ISEEVYAPIError(f"Telnet verify failed: {err}") from err
-        finally:
-            await self.telnet.close()
+
+        # streams over HTTP only — no device-console contention, keep it outside the lock.
+        streams_data = await self.get_streams()
+        streams = streams_data.get("streams", [])
+
+        last_err: Exception | None = None
+        async with self._telnet_lock:
+            for attempt in range(1, 3):
+                try:
+                    result = await _attempt()
+                except OSError as err:
+                    last_err = err
+                    _LOGGER.warning(
+                        "Verify channel attempt %d failed: %s", attempt, err
+                    )
+                    continue
+                if result.get("verified_via") is not None or result.get("title"):
+                    return result
+                # all-None / no-match — surface diagnostic detail then retry once
+                _LOGGER.warning(
+                    "Verify no-match (attempt %d): peer=%s title=%r streams=%d",
+                    attempt,
+                    result.get("peer_ip"),
+                    result.get("title"),
+                    len(streams),
+                )
+                continue
+        if last_err is not None:
+            raise ISEEVYAPIError(f"Telnet verify failed after retries: {last_err}") from last_err
+        # Lock released but loop exhausted with no match — return the last no-match result.
+        # (result is defined only inside the loop; recompute a safe default.)
+        return {"peer_ip": None, "index": None, "title": None, "verified_via": None}
 
     async def set_setting(self, field: str, value: str, reboot: bool = False) -> bool:
         """Safe config write: edit one cfg.ini field (live-applied, no reboot needed).
@@ -441,13 +480,14 @@ class ISEEVYClient:
         'autoreboot_status', 'autoreboot_time', 'lunbo_status', 'lunbo_time', 'udp_buf'.
         """
         try:
-            await self.telnet.connect()
-            await self.telnet.set_cfg_field(field, value, reboot=reboot)
+            async with self._telnet_lock:
+                await self.telnet.connect()
+                await self.telnet.set_cfg_field(field, value, reboot=reboot)
+                await self.telnet.close()
             return True
         except OSError as err:
-            raise ISEEVYAPIError(f"Telnet setting set failed: {err}") from err
-        finally:
             await self.telnet.close()
+            raise ISEEVYAPIError(f"Telnet setting set failed: {err}") from err
 
     async def get_all_data(self) -> dict[str, Any]:
         """Get all data in one call."""

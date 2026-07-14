@@ -75,16 +75,25 @@ class ISEEVYTelnetClient:
         # typed `echo TOKEN` input line contains "echo " and therefore does NOT match a
         # standalone output line. This avoids the false-positive of matching the input echo
         # (a bare `echo SHELL_OK_$$` check matched the echoed command, not real execution).
-        token = "SHELLREADY_" + secrets.token_hex(4)
-        self._capture.clear()
-        await self._send_line(f"echo {token}")
-        if not await self._wait_for_line(token, timeout=8.0):
-            raise ISEEVYTelnetError(
-                "Shell break failed on %s; app console still attached" % self.host
-            )
+        # Retry the break a few times: under concurrent device load (e.g. the web poll
+        # hitting getpro.cgi) the console flood can swallow the first CTRL-C break, leaving
+        # the app console attached and every subsequent command to fail.
+        for _ in range(3):
+            token = "SHELLREADY_" + secrets.token_hex(4)
+            self._capture.clear()
+            await self._send_line(f"echo {token}")
+            if await self._wait_for_line(token, timeout=8.0):
+                return
+            # break failed — re-issue CTRL-C x2 and try again
+            self._writer.write(b"\x03\x03")
+            await self._writer.drain()
+            await asyncio.sleep(1.0)
+        raise ISEEVYTelnetError(
+            "Shell break failed on %s; app console still attached" % self.host
+        )
 
     async def _wait_for(self, needle: bytes, timeout: float = 8.0) -> bool:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while loop.time() < deadline:
             if needle in b"".join(self._capture):
@@ -95,7 +104,7 @@ class ISEEVYTelnetClient:
     async def _wait_for_line(self, token: str, timeout: float = 8.0) -> bool:
         """True only if a STANDALONE output line equals `token` (excludes the
         `echo TOKEN` input echo, which contains 'echo ')."""
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while loop.time() < deadline:
             for line in b"".join(self._capture).decode("latin-1", "replace").splitlines():
