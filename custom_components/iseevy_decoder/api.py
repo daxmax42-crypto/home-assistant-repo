@@ -51,7 +51,7 @@ async def _raw_http_get(host: str, port: int, path: str, username: str, password
             f"Host: {host}:{port}\r\n"
             f"Authorization: Basic {auth}\r\n"
             f"Connection: close\r\n"
-            f"User-Agent: HomeAssistant-ISEEVY/1.0.18\r\n"
+            f"User-Agent: HomeAssistant-ISEEVY/1.0.19\r\n"
             f"\r\n"
         )
 

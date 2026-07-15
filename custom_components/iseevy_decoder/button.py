@@ -51,9 +51,9 @@ class ISEEVYRefreshButton(CoordinatorEntity, ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Press the button - force refresh of channel list."""
-        # Force a full data fetch which will re-query /getpro.cgi
-        await self.coordinator.async_request_refresh()
+        """Press the button - force immediate refresh of all decoder data."""
+        await self.coordinator.async_refresh()
+
 
 
 class ISEEVYVerifyChannelButton(CoordinatorEntity, ButtonEntity):
@@ -81,6 +81,7 @@ class ISEEVYVerifyChannelButton(CoordinatorEntity, ButtonEntity):
 class ISEEVYRefreshChannelListButton(CoordinatorEntity, ButtonEntity):
     """Button entity to manually refresh the channel list from the decoder."""
 
+
     def __init__(self, coordinator: ISEEVYDataUpdateCoordinator, entry: ConfigEntry) -> None:
         """Initialize the button entity."""
         super().__init__(coordinator)
@@ -98,6 +99,9 @@ class ISEEVYRefreshChannelListButton(CoordinatorEntity, ButtonEntity):
         )
 
     async def async_press(self) -> None:
-        """Press the button - force refresh of channel list."""
-        # Force a full data fetch which will re-query /getpro.cgi
-        await self.coordinator.async_request_refresh()
+        """Press the button - force refresh of channel list and push immediately.
+
+        Re-queries /getpro.cgi and pushes the new title list right away (not coalesced
+        with the next poll) so voice hubs re-sync the updated select options.
+        """
+        await self.coordinator.async_refresh_channel_list()

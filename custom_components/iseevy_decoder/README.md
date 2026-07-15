@@ -102,6 +102,38 @@ Channels switch via the safe `GET /setpro.cgi?playindex=N-1&end` surface (0-base
 playindex N-1). Volume and settings write via a safe telnet `/mnt/cfg.ini` edit (live-applied, no
 reboot) — **never `/set.cgi`** (it corrupts `cfg.ini` + `cfgbak.ini` and breaks video).
 
+## Voice Assistant Control
+
+The integration exposes channels to voice assistants two ways:
+
+| Entity | Echo/Alexa | Google Assistant | Assist |
+|--------|-----------|------------------|--------|
+| `select.iseevy_decoder_*_active_stream` | ❌ Unsupported (Alexa has no `select` support) | ✅ | ✅ |
+| **`media_player.iseevy_decoder_*_decoder`** (v1.0.19+) | ✅ | ✅ | ✅ |
+
+**Use the `media_player` entity for Alexa.** It exposes the 29 stream titles as a channel/input
+list, so you can say:
+
+- **By title:** *"Alexa, change the channel to 3camWest2"* or *"Alexa, change the input to 3camWest2"*
+  → `select_source(title)`
+- **By number:** *"Alexa, play channel 3"* → `play_media(channel=3)` → `select_stream(3)`
+
+Google Assistant and Assist can use either the `media_player` or the `select` entity (the `select`
+also accepts number-or-title via the `iseevy_decoder.select_stream` service).
+
+### Making new/renamed titles voice-aware
+
+When you add or rename streams in the decoder's web UI, the `media_player` `source_list` updates
+from the live `/getpro.cgi` data on the next poll. To push it to voice hubs **immediately**, press
+**Refresh Channel List** (v1.0.19 pushes the new title list right away instead of waiting for the
+next 30s poll). Then trigger a voice-hub re-sync:
+
+- **Alexa:** "Alexa, discover devices" (or re-discover in the Alexa app).
+- **Google Assistant:** re-sync via the Google Home / HA cloud config.
+
+Until the re-sync runs, the voice hub only knows the previously-discovered title list.
+
+
 ## Supported Devices
 
 - ISEEVY H.265/H.264 4K/1080P Video Decoder

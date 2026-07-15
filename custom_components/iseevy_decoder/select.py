@@ -74,6 +74,25 @@ class ISEEVYStreamSelect(CoordinatorEntity, SelectEntity):
             return f"{stream['index']}: {stream['title']}"
         return None
 
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Expose clean channel number/title for voice assistants and automations.
+
+        Alexa/Google match select options by their label ("3: 3camWest2"). Surfacing
+        the parsed number and title separately makes it easy to build voice routines /
+        scripts that pick a channel by number OR by name (e.g. `channel_title` for a
+        "switch to <name>" routine, `channel_number` for "channel <n>").
+        """
+        attrs: dict[str, object] = {}
+        cur = self.current_option
+        if cur:
+            try:
+                attrs["channel_number"] = int(cur.split(":")[0].strip())
+                attrs["channel_title"] = cur.split(":", 1)[1].strip()
+            except (ValueError, IndexError):
+                pass
+        return attrs
+
     async def async_select_option(self, option: str) -> None:
         """Change the selected stream."""
         try:

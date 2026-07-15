@@ -149,7 +149,7 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
         return True
 
     async def async_select_stream_by_name(self, stream_name: str) -> bool:
-        """Select a stream on the decoder by name."""
+        """Select a stream on the decoder by name (voice/automation friendly)."""
         try:
             # Get current streams to find index by name
             data = await self.client.get_all_data()
@@ -165,6 +165,45 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
         except ISEEVYAPIError as err:
             _LOGGER.error("Failed to select stream by name: %s", err)
             return False
+
+    async def async_refresh_channel_list(self) -> None:
+        """Re-query /getpro.cgi and push the new title list IMMEDIATELY.
+
+        Used by the Refresh Channel List button. On HA 2026.x async_request_refresh()
+        is coalesced with the scheduled poll, so a title change would not surface until
+        the next 30s tick — and voice hubs (Alexa/Google) only re-sync option lists on a
+        pushed state change. Force the push so new/renamed titles become voice-addressable
+        without waiting for the next poll.
+        """
+        try:
+            data = await self.client.get_all_data()
+        except ISEEVYAPIError as err:
+            _LOGGER.error("Channel list refresh failed: %s", err)
+            return
+        data["last_selected_stream"] = self._last_selected_stream
+        data["last_verified_channel"] = self._last_verified
+        if self.data:
+            self.async_set_updated_data(data)
+        else:
+            await self.async_request_refresh()
+
+    async def async_refresh(self) -> None:
+        """Generic immediate refresh of all device data (Refresh Stream button).
+
+        Pushes right away instead of relying on the coalesced async_request_refresh()
+        so sensor/select updates land on HA 2026.x without waiting for the next poll.
+        """
+        try:
+            data = await self.client.get_all_data()
+        except ISEEVYAPIError as err:
+            _LOGGER.error("Refresh failed: %s", err)
+            return
+        data["last_selected_stream"] = self._last_selected_stream
+        data["last_verified_channel"] = self._last_verified
+        if self.data:
+            self.async_set_updated_data(data)
+        else:
+            await self.async_request_refresh()
 
     async def async_shutdown(self) -> None:
         """Shutdown the client."""
