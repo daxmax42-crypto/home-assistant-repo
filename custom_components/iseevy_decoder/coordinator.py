@@ -61,6 +61,17 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
         """Fetch data from API."""
         try:
             data = await self.client.get_all_data()
+            # Seed the "last selected" dropdown from the device's TRUE current title on
+            # first load (or whenever the user hasn't explicitly chosen a stream yet).
+            # The reliable current title lives in /mnt/pro.ini (telnet), NOT in
+            # getpro.cgi's curplay_title (which the decoder reports stuck at "1"). The
+            # verify flow already reads pro.ini, so we reuse the same ground-truth source.
+            # Without this, the Active Stream dropdown stays empty/stale until the first
+            # button press or verify — which felt unstable vs older builds. Only seed
+            # when we have no user-selected value, so an explicit selection is never
+            # overwritten by a later poll. One telnet read, then cached (no per-poll cost).
+            if self._last_selected_stream is None:
+                await self._seed_selected_from_pro_ini(data)
             # Add cached last selected stream to data for select entity
             data["last_selected_stream"] = self._last_selected_stream
             # Add last netstat-verified channel (off-site ground truth)
@@ -68,6 +79,49 @@ class ISEEVYDataUpdateCoordinator(DataUpdateCoordinator):
             return data
         except ISEEVYAPIError as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
+
+    async def _seed_selected_from_pro_ini(self, data: dict[str, Any]) -> None:
+        """One-shot: read /mnt/pro.ini curplay_title and match it to a stream.
+
+        Runs only when no stream has been explicitly selected (cached None). A telnet
+        failure here is non-fatal: the dropdown simply stays empty until the first
+        Verify/select, same as before this change.
+
+        IMPORTANT: the pro.ini `cat` output is intermittently swallowed by the device's
+        console flood UNLESS a netstat call runs first to settle the console. This is
+        the same fragility verify_channel tolerates, and verify's _attempt() calls
+        get_rtsp_peer() BEFORE read_pro_ini() for exactly this reason. We mirror that
+        ordering here so the read is reliable. Retries once more if the title is still
+        missing.
+        """
+        cur_title: str | None = None
+        try:
+            async with self.client._telnet_lock:
+                for _ in range(2):
+                    await self.client.telnet.connect()
+                    try:
+                        # Prime the console (mirrors verify_channel._attempt ordering).
+                        await self.client.telnet.get_rtsp_peer()
+                        pro = await self.client.telnet.read_pro_ini()
+                    finally:
+                        await self.client.telnet.close()
+                    for ln in pro.splitlines():
+                        if ln.startswith("curplay_title="):
+                            cur_title = ln.split("=", 1)[1].strip()
+                            break
+                    if cur_title:
+                        break
+        except OSError as err:
+            _LOGGER.debug("First-load title seed skipped (telnet unavailable): %s", err)
+            return
+        if not cur_title:
+            _LOGGER.debug("First-load title seed: no curplay_title from pro.ini")
+            return
+        for s in data.get("streams", []):
+            if s.get("title", "").strip() == cur_title:
+                self._last_selected_stream = s["index"]
+                _LOGGER.info("Seeded Active Stream from pro.ini: %s", cur_title)
+                break
 
     async def async_set_volume(self, volume: int) -> bool:
         """Set volume on the decoder (safe telnet cfg.ini write). Push update immediately."""
