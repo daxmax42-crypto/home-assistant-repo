@@ -28,10 +28,11 @@ from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
     MediaPlayerEntity,
 )
-from homeassistant.components.media_player.const import (
-    MEDIA_TYPE_CHANNEL,
-    MediaPlayerEntityFeature,
-)
+from homeassistant.components.media_player.const import MediaPlayerEntityFeature
+
+# Channel media type. The imported constant was removed from media_player.const in
+# newer HA core (caused ImportError on 2026.x); pin the literal to stay version-portable.
+MEDIA_TYPE_CHANNEL = "channel"
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -109,23 +110,22 @@ class ISEEVYMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             _LOGGER.error("Failed to select source %r", source)
 
     async def async_play_media(self, media_type: str, media_id: str, **kwargs: Any) -> None:
-        """Change channel by NUMBER (voice: "play channel <n>").
+        """Change channel by NUMBER or TITLE (voice: "play channel 3" / title).
 
-        Accepts media_type "channel" with media_id being the 1-based channel number,
-        or a bare number string. Also accepts a title as a fallback.
+        Voice hubs send media_type inconsistently, so don't gate on it: try the id as a
+        1-based channel number first (validated against the live stream list), then fall
+        back to matching the title. This handles both "play channel 3" and a title string.
         """
         media_id = str(media_id).strip()
-        if media_type == MEDIA_TYPE_CHANNEL or media_type in (None, ""):
-            # Try to parse as a channel number first.
-            try:
-                idx = int(media_id)
-                success = await self.coordinator.async_select_stream(idx)
-                if success:
+        streams = (self.coordinator.data or {}).get("streams", [])
+        # Try number first (validated so we never switch to a non-existent channel).
+        try:
+            idx = int(media_id)
+            if 1 <= idx <= len(streams):
+                if await self.coordinator.async_select_stream(idx):
                     return
-                # If the number didn't map (out of range), fall through to name match.
-            except ValueError:
-                pass
+        except ValueError:
+            pass
         # Fallback: treat media_id as a title.
-        success = await self.coordinator.async_select_stream_by_name(media_id)
-        if not success:
+        if not await self.coordinator.async_select_stream_by_name(media_id):
             _LOGGER.error("Failed to play media %r (type=%r)", media_id, media_type)
